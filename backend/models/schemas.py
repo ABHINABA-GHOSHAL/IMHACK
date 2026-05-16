@@ -73,39 +73,9 @@ class SprintHealthResponse(BaseModel):
     ai_summary: str = ""
 
 
-class ReminderType(str, Enum):
-    ASSIGNMENT = "assignment"
-    DUE_2_DAYS = "due_2_days"
-    DUE_TODAY = "due_today"
-    OVERDUE = "overdue"
-    STALE = "stale"
-    BLOCKER = "blocker"
-    SPRINT_RISK = "sprint_risk"
-    WEEKLY_DIGEST = "weekly_digest"
-
-
-class Reminder(BaseModel):
-    id: Optional[str] = None
-    ticket_id: str
-    ticket_subject: str
-    assignee_name: str
-    assignee_email: Optional[str] = None
-    reminder_type: ReminderType
-    message: str
-    sent_at: Optional[str] = None
-    acknowledged: bool = False
-    channel: str = "in_app"
-
-
-class SendReminderRequest(BaseModel):
-    ticket_id: str
-    assignee_email: str
-    reminder_type: ReminderType
-    custom_message: Optional[str] = None
-
-
 class StatusReportRequest(BaseModel):
     project_id: Optional[str] = None
+    version_id: Optional[str] = None
     sprint_name: Optional[str] = None
     include_history: bool = True
 
@@ -127,6 +97,17 @@ class CreateTicketsRequest(BaseModel):
     brd_content: str
     project_id: str
     team: Optional[str] = None
+
+
+class PreviewTicketsRequest(BaseModel):
+    brd_content: str
+    ticket_preferences: Optional[Dict[str, Any]] = None
+
+
+class ConfirmTicketsRequest(BaseModel):
+    project_id: str
+    version_id: Optional[str] = None
+    tickets: List[Dict[str, Any]]
 
 
 class ChatMessage(BaseModel):

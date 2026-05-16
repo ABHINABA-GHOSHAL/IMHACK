@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, HTTPException
 from models.schemas import StatusReportRequest, StatusReportResponse
 from services.openproject_service import openproject_service
@@ -8,10 +8,95 @@ from services.rag_service import rag_service
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
+def _parse_due_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _build_assignee_analysis(tickets: list) -> list:
+    today = date.today()
+    closed_words = ("closed", "done", "resolved", "completed", "cancelled", "rejected")
+    not_started_words = ("new", "open", "to do", "todo", "backlog")
+
+    per_person = {}
+    for t in tickets or []:
+        assignee = t.get("assignee") or "Unassigned"
+        status = (t.get("status") or "").lower()
+        is_closed = any(word in status for word in closed_words)
+        is_blocked = "blocked" in status or bool(t.get("is_blocked"))
+        is_not_started = any(word in status for word in not_started_words)
+        due_raw = t.get("due_date")
+        due_date = _parse_due_date(due_raw)
+        is_overdue = bool(due_date and due_date < today and not is_closed)
+
+        item = per_person.setdefault(
+            assignee,
+            {
+                "assignee": assignee,
+                "total_tickets": 0,
+                "open_tickets": 0,
+                "blocked_tickets": 0,
+                "overdue_tickets": 0,
+                "not_started_tickets": 0,
+                "risk_level": "Low",
+                "next_actions": [],
+                "problem_ticket_ids": [],
+            },
+        )
+        item["total_tickets"] += 1
+        if not is_closed:
+            item["open_tickets"] += 1
+        if is_blocked:
+            item["blocked_tickets"] += 1
+            item["problem_ticket_ids"].append(str(t.get("id")))
+        if is_overdue:
+            item["overdue_tickets"] += 1
+            item["problem_ticket_ids"].append(str(t.get("id")))
+        if is_not_started and not is_closed:
+            item["not_started_tickets"] += 1
+
+    analysis = []
+    for assignee, item in per_person.items():
+        score = item["blocked_tickets"] * 3 + item["overdue_tickets"] * 2 + max(0, item["open_tickets"] - 4)
+        if score >= 5:
+            item["risk_level"] = "High"
+        elif score >= 2:
+            item["risk_level"] = "Medium"
+        else:
+            item["risk_level"] = "Low"
+
+        actions = []
+        if item["blocked_tickets"] > 0:
+            actions.append(f"Resolve blockers on {item['blocked_tickets']} ticket(s) today and escalate dependencies.")
+        if item["overdue_tickets"] > 0:
+            actions.append(f"Recover {item['overdue_tickets']} overdue ticket(s) with revised ETA by end of day.")
+        if item["not_started_tickets"] > 0 and item["open_tickets"] > 0:
+            actions.append("Start highest-priority not-started ticket and post kickoff update in comments.")
+        if not actions:
+            actions.append("Continue execution and close in-progress items; keep updates current.")
+
+        dedup_ids = []
+        seen = set()
+        for tid in item["problem_ticket_ids"]:
+            if tid and tid not in seen:
+                seen.add(tid)
+                dedup_ids.append(tid)
+        item["problem_ticket_ids"] = dedup_ids[:6]
+        item["next_actions"] = actions
+        analysis.append(item)
+
+    analysis.sort(key=lambda x: ({"High": 0, "Medium": 1, "Low": 2}.get(x["risk_level"], 3), -x["open_tickets"]))
+    return analysis
+
+
 @router.post("/generate")
 async def generate_status_report(req: StatusReportRequest):
     try:
-        tickets = await openproject_service.get_work_packages(req.project_id)
+        tickets = await openproject_service.get_work_packages(req.project_id, req.version_id)
         sprint_info = await openproject_service.get_sprint_info(req.project_id)
         health = openproject_service.compute_sprint_health(tickets, sprint_info)
 
@@ -47,10 +132,14 @@ async def generate_status_report(req: StatusReportRequest):
             )
             blocker_context = rag_service.retrieve_blocker_patterns(blocker_desc)
 
+        assignee_analysis = _build_assignee_analysis(tickets)
+
         full_report = await llm_service.generate_status_report(
             sprint_data=sprint_data,
             historical_comparison=historical,
             blocker_context=blocker_context,
+            tickets=tickets,
+            assignee_analysis=assignee_analysis,
         )
 
         return {
@@ -59,6 +148,7 @@ async def generate_status_report(req: StatusReportRequest):
             "health_status": health.get("health_status"),
             "completion_percentage": health.get("completion_percentage"),
             "blocked_tickets": health.get("blocked_tickets"),
+            "assignee_analysis": assignee_analysis,
             "full_report": full_report,
             "generated_at": datetime.now().isoformat(),
             "sprint_data": sprint_data,

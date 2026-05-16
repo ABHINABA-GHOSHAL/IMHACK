@@ -1,7 +1,9 @@
+import logging
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from routers import documents, sprint, reminders, reports
+from routers import documents, sprint, reports, auth
 from config import FRONTEND_URL, PORT
 import uvicorn
 
@@ -21,8 +23,8 @@ app.add_middleware(
 
 app.include_router(documents.router)
 app.include_router(sprint.router)
-app.include_router(reminders.router)
 app.include_router(reports.router)
+app.include_router(auth.router)
 
 
 @app.get("/")

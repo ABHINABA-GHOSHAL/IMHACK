@@ -1,24 +1,69 @@
 import uuid
-from fastapi import APIRouter, HTTPException, UploadFile, File
+import logging
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+
+log = logging.getLogger("documents")
 from models.schemas import (
     GenerateDocumentRequest,
     RefineDocumentRequest,
     IngestDocumentRequest,
     DocumentResponse,
     CreateTicketsRequest,
+    PreviewTicketsRequest,
+    ConfirmTicketsRequest,
 )
 from services.llm_service import llm_service
 from services.rag_service import rag_service
 from services.openproject_service import openproject_service
 import json
 import asyncio
+import re
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
+def _clean_brd_context(raw_text: str) -> str:
+    text = (raw_text or "").strip()
+    if not text:
+        return ""
+
+    # Remove common BRD metadata/preamble lines that should not be copied into tickets.
+    text = re.sub(r"^\s*AI\s*BRD\s*Draft\s*Context\s*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"^\s*BRD\s*:\s*.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"^\s*Priority\s*:\s*.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"^\s*Status\s*:\s*.*$", "", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    # Keep only structured BRD content when present.
+    marker = "## BUSINESS PROBLEM"
+    idx = text.find(marker)
+    if idx >= 0:
+        text = text[idx:]
+
+    # Drop Source References tail block entirely (supports both heading and inline variants).
+    text = re.sub(
+        r"(^|\n)\s*(?:##\s*)?Source\s+References\s*:?\s*[\s\S]*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return text
+
+
+def _compose_ticket_description(task: dict) -> str:
+    base = (task.get("description") or "").strip()
+    draft = _clean_brd_context(task.get("ai_brd_draft") or "")
+    if not draft:
+        return base
+    # Only include the cleaned draft, no meta lines or headings
+    prefix = "\n\n" if base else ""
+    return f"{base}{prefix}{draft}"
+
+
 @router.post("/generate", response_model=DocumentResponse)
 async def generate_document(req: GenerateDocumentRequest):
+    log.info("generate_document | doc_type=%s | problem=%r", req.doc_type.value, req.problem[:80])
     try:
         # RAG retrieval
         examples = rag_service.retrieve_for_document_generation(
@@ -54,6 +99,7 @@ async def generate_document(req: GenerateDocumentRequest):
             doc_type=req.doc_type.value,
         )
     except Exception as e:
+        log.error("generate_document failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -78,6 +124,42 @@ Priority: {req.priority}
 
 Historical Examples:
 {examples}"""
+
+    if str(req.doc_type).strip().upper() == "BRD":
+        system_prompt = f"""You are an expert Product Manager and Technical Writer at IndiaMart.
+Create a structured BRD in Markdown with EXACTLY these top-level headings in this order:
+
+## BUSINESS PROBLEM
+## BUSINESS REQUIREMENTS
+## EXPECTED IMPACT
+
+Rules:
+- Always include all three headings.
+- Under BUSINESS REQUIREMENTS, use numbered bullet points.
+- Under EXPECTED IMPACT, do NOT use tables.
+- Format EXPECTED IMPACT as three short subsections only:
+  1. Conversion & Engagement KPIs
+  2. User Experience Outcomes
+  3. Operational / Business Outcomes
+- Under each subsection, use 2-4 bullets in the form: Metric / Direction / Why it matters.
+- Keep the BRD concise, concrete, and business-focused.
+"""
+
+        user_prompt = f"""Create a BRD from the following details:
+
+Problem Statement: {req.problem}
+Target Users: {req.users}
+Success Metrics: {req.success_metric}
+Deadline: {req.deadline}
+Teams Involved: {req.teams}
+Priority: {req.priority}
+
+Retrieved Historical Examples:
+{examples}
+
+Additional Context:
+{req.additional_context or ""}
+"""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -174,7 +256,9 @@ async def create_tickets_from_brd(req: CreateTicketsRequest):
                 project_id=req.project_id,
                 title=task.get("title", "Untitled Task"),
                 description=task.get("description", ""),
+                assignee_id=task.get("assignee_id"),
                 due_date=due_date,
+                work_package_type=task.get("type", "Task"),
             )
             created_tickets.append({**ticket, "team": task.get("team"), "priority": task.get("priority")})
             await asyncio.sleep(0.3)  # Rate limit
@@ -183,4 +267,153 @@ async def create_tickets_from_brd(req: CreateTicketsRequest):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/preview-tickets")
+async def preview_tickets_from_brd(req: PreviewTicketsRequest):
+    """Extract a single ticket draft from a BRD using AI — does NOT create anything in OpenProject yet."""
+    log.info("preview_tickets | brd_length=%d chars", len(req.brd_content))
+    try:
+        raw = await llm_service.extract_tasks_from_brd(req.brd_content, req.ticket_preferences or {})
+        log.info("preview_tickets → LLM returned %d chars of raw JSON", len(raw))
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1]
+        if clean.endswith("```"):
+            clean = clean.rsplit("\n", 1)[0]
+        parsed = json.loads(clean)
+        # Support both single object and legacy array (take first element)
+        if isinstance(parsed, list):
+            t = parsed[0] if parsed else {}
+        else:
+            t = parsed
+        t.setdefault("id", 0)
+        t.setdefault("title", "Untitled Task")
+        t.setdefault("description", "")
+        t.setdefault("team", "Engineering")
+        t.setdefault("priority", "Medium")
+        t.setdefault("estimatedDays", 7)
+        t.setdefault("type", "Task")
+        t.setdefault("component", "General")
+        t.setdefault("effortPoints", 3)
+        t.setdefault("risk", "Medium")
+        t.setdefault("assignee_id", None)
+        t.setdefault("assignee_name", None)
+        t.setdefault("responsible_id", None)
+        t.setdefault("responsible_name", None)
+        t.setdefault("estimatedHours", max(1, int(t.get("estimatedDays", 7) or 7) * 8))
+        # Always sanitize BRD draft text regardless of whether AI returned this field.
+        t["ai_brd_draft"] = _clean_brd_context(t.get("ai_brd_draft") or req.brd_content)
+        log.info("preview_tickets → returning single draft ticket: %r", t.get("title", "")[:60])
+        return {"ticket": t}
+    except json.JSONDecodeError:
+        log.error("preview_tickets → JSON decode failed on LLM output")
+        raise HTTPException(status_code=422, detail="AI returned invalid JSON — try regenerating")
+    except Exception as e:
+        log.error("preview_tickets failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirm-tickets")
+async def confirm_tickets(req: ConfirmTicketsRequest):
+    """PM-approved: create the reviewed tickets in OpenProject."""
+    log.info("confirm_tickets | project=%s | version=%s | count=%d", req.project_id, req.version_id, len(req.tickets))
+    try:
+        created_tickets = []
+        from datetime import datetime, timedelta
+        import asyncio
+
+        for task in req.tickets:
+            due_date = (datetime.now() + timedelta(days=int(task.get("estimatedDays", 7)))).strftime("%Y-%m-%d")
+            log.info("confirm_tickets → creating ticket: %r due=%s", task.get("title", "")[:60], due_date)
+            ticket = await openproject_service.create_work_package(
+                project_id=req.project_id,
+                title=task.get("title", "Untitled Task"),
+                description=_compose_ticket_description(task),
+                assignee_id=task.get("assignee_id"),
+                responsible_id=task.get("responsible_id"),
+                due_date=due_date,
+                estimated_hours=task.get("estimatedHours"),
+                version_id=req.version_id,
+                work_package_type=task.get("type", "Task"),
+            )
+            created_tickets.append({**ticket, "team": task.get("team"), "priority": task.get("priority")})
+            await asyncio.sleep(0.3)
+
+        log.info("confirm_tickets → done. %d ticket(s) created.", len(created_tickets))
+        return {"created": len(created_tickets), "tickets": created_tickets}
+    except Exception as e:
+        log.error("confirm_tickets failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirm-tickets-with-files")
+async def confirm_tickets_with_files(
+    project_id: str = Form(...),
+    version_id: str = Form(None),
+    tickets_json: str = Form(...),
+    files: list[UploadFile] = File(default=[]),
+):
+    """PM-approved: create reviewed tickets in OpenProject and attach uploaded files."""
+    try:
+        tickets = json.loads(tickets_json)
+        if not isinstance(tickets, list):
+            raise ValueError("tickets_json must be a JSON array")
+
+        buffered_files = []
+        for f in files or []:
+            content = await f.read()
+            if content:
+                buffered_files.append((f.filename or "attachment.bin", content, f.content_type))
+
+        created_tickets = []
+        from datetime import datetime, timedelta
+
+        for task in tickets:
+            due_date = (datetime.now() + timedelta(days=int(task.get("estimatedDays", 7)))).strftime("%Y-%m-%d")
+            ticket = await openproject_service.create_work_package(
+                project_id=project_id,
+                title=task.get("title", "Untitled Task"),
+                description=_compose_ticket_description(task),
+                assignee_id=task.get("assignee_id"),
+                responsible_id=task.get("responsible_id"),
+                due_date=due_date,
+                estimated_hours=task.get("estimatedHours"),
+                version_id=version_id,
+                work_package_type=task.get("type", "Task"),
+            )
+
+            attached = []
+            failed_attachments = []
+            for filename, content, content_type in buffered_files:
+                ok = await openproject_service.add_attachment_to_ticket(
+                    ticket_id=ticket["id"],
+                    filename=filename,
+                    content=content,
+                    content_type=content_type,
+                )
+                if ok:
+                    attached.append(filename)
+                else:
+                    failed_attachments.append(filename)
+
+            created_tickets.append(
+                {
+                    **ticket,
+                    "team": task.get("team"),
+                    "priority": task.get("priority"),
+                    "attached_files": attached,
+                    "failed_attachments": failed_attachments,
+                }
+            )
+            await asyncio.sleep(0.3)
+
+        return {
+            "created": len(created_tickets),
+            "tickets": created_tickets,
+            "uploaded_files": [f[0] for f in buffered_files],
+        }
+    except Exception as e:
+        log.error("confirm_tickets_with_files failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

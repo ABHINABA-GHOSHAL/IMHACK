@@ -115,7 +115,7 @@ Historical average at Day 7: 82% | Current: 73%
 ## Prediction
 78% probability on-time based on velocity trend
 ## Assignee Compliance
-2 assignees have not updated tickets in 48 hours — reminders sent""",
+2 assignees need follow-up on stale updates""",
         "doc_type": "status_report",
         "team": "Product",
         "project_id": "SPRINT-22",
