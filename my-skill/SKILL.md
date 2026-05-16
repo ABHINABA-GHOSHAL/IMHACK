@@ -1,5 +1,5 @@
 ---
-name: myskill
+name: my-skill
 description: Use this skill when working on the IM-Main repository—a project intelligence and documentation copilot that generates BRDs, monitors sprints, analyzes tickets, and produces status reports using OpenProject live data and RAG. Handles document generation workflows, sprint KPI tracking, ticket analysis, and AI-driven reporting for IndiaMart project operations.
 ---
 
@@ -216,13 +216,13 @@ Run these from the repository root:
 **Check frontend for syntax errors:**
 
 ```powershell
-myskill/scripts/validate-frontend.ps1
+my-skill/scripts/validate-frontend.ps1
 ```
 
 **Check backend for syntax errors:**
 
 ```powershell
-myskill/scripts/validate-backend.ps1
+my-skill/scripts/validate-backend.ps1
 ```
 
 ### Direct API Testing

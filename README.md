@@ -207,7 +207,7 @@ IM-Main/
 │   ├── public/                        # Static assets
 │   └── dist/                          # Production build output
 │
-├── myskill/
+├── my-skill/
 │   ├── SKILL.md                       # Agent skill definition
 │   ├── assets/
 │   │   ├── retrospective-prompt-template.md
@@ -219,10 +219,6 @@ IM-Main/
 │   └── scripts/
 │       ├── validate-frontend.ps1
 │       └── validate-backend.ps1
-│
-├── .github/
-│   └── skills/
-│       └── myskill/                   # Auto-discoverable skill
 │
 ├── venv/                              # Python virtual environment
 └── .env                               # Environment configuration (git-ignored)
@@ -441,10 +437,10 @@ pip install -r requirements.txt                         # Install dependencies
 
 ```powershell
 # Frontend validation
-.github/skills/myskill/scripts/validate-frontend.ps1
+my-skill/scripts/validate-frontend.ps1
 
 # Backend validation
-.github/skills/myskill/scripts/validate-backend.ps1
+my-skill/scripts/validate-backend.ps1
 ```
 
 ### Testing API Endpoints
@@ -556,15 +552,15 @@ pip install -r requirements.txt
 
 ### Quick References
 
-- **Agent Skill Definition:** [myskill/SKILL.md](./myskill/SKILL.md) — For AI agent interaction patterns
-- **System Architecture:** [myskill/references/architecture.md](./myskill/references/architecture.md) — Deep technical design
-- **User Workflows:** [myskill/references/workflows.md](./myskill/references/workflows.md) — Feature descriptions and user flows
-- **RAG & OpenProject:** [myskill/references/rag-openproject.md](./myskill/references/rag-openproject.md) — Integration details
+- **Agent Skill Definition:** [my-skill/SKILL.md](./my-skill/SKILL.md) — For AI agent interaction patterns
+- **System Architecture:** [my-skill/references/architecture.md](./my-skill/references/architecture.md) — Deep technical design
+- **User Workflows:** [my-skill/references/workflows.md](./my-skill/references/workflows.md) — Feature descriptions and user flows
+- **RAG & OpenProject:** [my-skill/references/rag-openproject.md](./my-skill/references/rag-openproject.md) — Integration details
 
 ### Prompt Templates
 
-- **Retrospective Prompts:** [myskill/assets/retrospective-prompt-template.md](./myskill/assets/retrospective-prompt-template.md)
-- **Status Report Prompts:** [myskill/assets/status-report-prompt-template.md](./myskill/assets/status-report-prompt-template.md)
+- **Retrospective Prompts:** [my-skill/assets/retrospective-prompt-template.md](./my-skill/assets/retrospective-prompt-template.md)
+- **Status Report Prompts:** [my-skill/assets/status-report-prompt-template.md](./my-skill/assets/status-report-prompt-template.md)
 
 ### External Resources
 
@@ -633,7 +629,7 @@ When reporting bugs, include:
 
 For questions or issues related to this project:
 
-1. **Check the documentation:** Start with [myskill/SKILL.md](./myskill/SKILL.md)
+1. **Check the documentation:** Start with [my-skill/SKILL.md](./my-skill/SKILL.md)
 2. **Review error logs:** Check console output and network tab
 3. **Run validation scripts:** Use the provided PowerShell validation scripts
 4. **Test endpoints directly:** Use curl or Postman to verify API behavior
