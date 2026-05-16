@@ -9,6 +9,70 @@ description: Use this skill when working on the IM-Main repository—a project i
 
 This is a specialized skill for working with the **IM-Main** repository, an internal IndiaMart project-operations copilot. The system helps project managers and teams generate intelligent documentation, monitor sprint health, analyze tickets, and create data-driven status reports.
 
+## Build Narrative (What We Owned And Why)
+
+This section captures the execution story behind the build, not just the architecture.
+
+### Problem We Targeted
+
+Project teams were spending too much time moving between requirement docs, ticket systems, sprint updates, and report formatting. The core problem was fragmented execution data and manual coordination overhead.
+
+### Team Ownership By Function
+
+- **Product and workflow design:** Defined the end-to-end flow from BRD generation to sprint reporting and set human approval checkpoints before ticket creation.
+- **Frontend implementation:** Built route-level experiences for Dashboard, Document Copilot, Sprint Monitor, Ticket Analysis, and Status Reports with consistent interaction patterns.
+- **Backend orchestration:** Implemented router-level composition logic to combine OpenProject live data, RAG retrieval, and LLM output.
+- **AI and retrieval quality:** Added prompt templates and retrieval patterns for retrospectives and status reports, including fallback behavior.
+- **Operational hardening:** Fixed production-affecting issues like blank PDF exports, stale runtime config behavior, and metadata leakage into created tickets.
+
+### Key Decisions And Trade-Offs
+
+1. **Use OpenProject as the source of truth**
+   - Alternative considered: relying on generated summaries or frontend-cached state.
+   - Decision: all execution metrics and ticket state must come from live OpenProject data.
+   - Trade-off: more API coordination complexity, but better trust in numbers.
+
+2. **Use FastAPI router composition instead of pushing logic to frontend**
+   - Alternative considered: assembling sprint/report logic in page components.
+   - Decision: keep orchestration in backend routers and services.
+   - Trade-off: more backend ownership required, but behavior stays consistent across UI flows.
+
+3. **Use ChromaDB document-level retrieval first**
+   - Alternative considered: immediate chunk-level retrieval and more complex indexing.
+   - Decision: start with document-level retrieval for speed and maintainability.
+   - Trade-off: less granular matching in some cases, but faster iteration and lower complexity.
+
+4. **Use cloned rendered DOM for PDF export**
+   - Alternative considered: exporting from `innerHTML`.
+   - Decision: clone the real rendered node and wait one frame before `pdf.html()`.
+   - Trade-off: slightly more code, but reliable PDF output with correct styling.
+
+5. **Keep LLM fallback paths for user-visible continuity**
+   - Alternative considered: return hard errors when LLM calls fail.
+   - Decision: generate deterministic fallback retrospective content when AI generation fails.
+   - Trade-off: fallback content is less rich than full AI output, but avoids broken user flows.
+
+### Challenges Encountered And Resolved
+
+- **Challenge:** BRD metadata leaked into ticket descriptions.
+  - **Resolution:** Added cleanup logic and enforced cleaned composition before ticket creation.
+
+- **Challenge:** Ticket and report PDF exports produced blank output.
+  - **Resolution:** Switched from `innerHTML` extraction to cloned rendered DOM capture pattern.
+
+- **Challenge:** Runtime LLM failures from stale/missing API key state.
+  - **Resolution:** Added runtime config refresh behavior in LLM service.
+
+- **Challenge:** Legacy reminders/nudge subsystem conflicted with active product scope.
+  - **Resolution:** Removed reminder routes/services and cleaned references from frontend/backend.
+
+### Evidence Of Skill Impact On Build Quality
+
+- The skill codified non-obvious rules such as BRD metadata cleaning, OpenProject-first metrics, and PDF export implementation details.
+- Prompt templates and references reduced repeated trial-and-error when adjusting retrospective and report quality.
+- Validation scripts gave fast syntax/build feedback before pushing changes.
+- Reference docs now capture where behavior belongs (frontend vs router vs service), reducing incorrect fixes in the wrong layer.
+
 ### System Architecture
 
 **Technology Stack:**
